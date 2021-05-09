@@ -36,7 +36,7 @@ fun main(args: Array<String>) {
             val size = input.nextInt()
             val isMine = input.nextInt() != 0
             val isDormant = input.nextInt() != 0
-            val tree = Tree(cellIndex, size, isMine, isDormant)
+            val tree = Tree(game.board.find { it.index == cellIndex }!!, size, isMine, isDormant)
             game.trees.add(tree)
         }
         game.myTrees.addAll(game.trees.filter { it.isMine })
@@ -131,22 +131,79 @@ data class Game(
             return Action("WAIT")
         }
 
-        val numberOfSeeds = myTrees.filter { it.size == 0 }.size
-        val numberOf1Trees = myTrees.filter { it.size == 1 }.size
-        val numberOf2Trees = myTrees.filter { it.size == 2 }.size
-        val numberOf3Trees = myTrees.filter { it.size == 3 }.size
+        val desiredOuterFarmingTreeCount = 4
+        val lastDayBeforeCompletions = 20
 
-        val seed = findActionForRichestCell(possibleActions.filter { it.type == "SEED" }).takeIf { numberOfSeeds <= 2 && numberOf1Trees < 1  || day >= 22}
+        val mySeeds = myTrees.filter { it.size == 0 }
+        val my1Trees = myTrees.filter { it.size == 1 }
+        val my2Trees = myTrees.filter { it.size == 2 }
+        val my3Trees = myTrees.filter { it.size == 3 }
+
+        val myOuterFarmingTrees = myTrees.filter { isInOuterRing(it.cell.index) }
+
+        val coreStrategyActions: MutableList<Action?> = ArrayList()
+
+        if (day > lastDayBeforeCompletions) {
+            coreStrategyActions.add(findActionForRichestCell(possibleActions.filter { it.type == "COMPLETE" }))
+        }
+
+        if (myOuterFarmingTrees.filter { it.size < 3 }.count() < desiredOuterFarmingTreeCount) {
+            coreStrategyActions.add(possibleActions.find { it.type == "GROW" && isInOuterRing(it.targetCellIdx!!) })
+        }
+
+        if (myTrees.filter { isInOuterRing(it.cell.index) }.count() < desiredOuterFarmingTreeCount && day < lastDayBeforeCompletions) {
+            val seedForOuterFarmingTree =
+                possibleActions.find { it.type == "SEED" && isInOuterRing(it.targetCellIdx!!) && !isBadNeighbourhood(it.targetCellIdx!!) }
+            coreStrategyActions.add(seedForOuterFarmingTree)
+        }
+
+        val completeValueTreeAction =
+            possibleActions.filter { it.type == "COMPLETE" && !isInOuterRing(it.targetCellIdx!!) }
+                .takeIf { it.size > 1 }?.firstOrNull()
+        coreStrategyActions.add(completeValueTreeAction)
+
+        val wellPlacedRichSeed =
+            findActionForRichestCell(possibleActions.filter { it.type == "SEED" && !isBadNeighbourhood(it.targetCellIdx!!) }).takeIf { mySeeds.size < 3 || day < lastDayBeforeCompletions }
+
+        val badPlacedRichSeed =
+            findActionForRichestCell(possibleActions.filter { it.type == "SEED" }).takeIf { mySeeds.isEmpty() && myOuterFarmingTrees.size >= desiredOuterFarmingTreeCount && day < lastDayBeforeCompletions }
+
         val grow = findActionForRichestCell(possibleActions.filter { it.type == "GROW" })
-        val complete = findActionForRichestCell(possibleActions.filter { it.type == "COMPLETE" }).takeIf { day >= 21 || numberOf3Trees > 3 }
-        val wait = possibleActions.find { it.type == "WAIT" }
+        val growBiggestTree = possibleActions.asSequence()
+            .filter { it.type == "GROW" }
+            .map { action -> myTrees.find { it.cell.index == action.targetCellIdx } }
+            .filterNotNull()
+            .sortedBy { it.size }.map { Action("GROW", targetCellIdx = it.cell.index) }
+            .lastOrNull()
 
-        return listOf(complete, grow, seed, wait).first { it != null }!!
+        coreStrategyActions.addAll(listOf(growBiggestTree, grow, wellPlacedRichSeed, badPlacedRichSeed))
+
+        if (day == 23) {
+            return findActionForRichestCell(possibleActions.filter { it.type == "COMPLETE" }) ?: Action("WAIT")
+        }
+
+        return coreStrategyActions.filterNotNull().firstOrNull() ?: Action("WAIT")
+    }
+
+    private fun isBadNeighbourhood(targetCellIdx: Int): Boolean {
+
+        val isNeighbourOfTree = trees.flatMap { it.cell.neighbours.asIterable() }.contains(targetCellIdx)
+        val isNeighbourOfMountain = board.first { it.index == targetCellIdx }.richness == 0
+        return isNeighbourOfMountain || isNeighbourOfTree
     }
 
     private fun findActionForRichestCell(actions: List<Action>): Action? {
-        return actions.takeIf { it.isNotEmpty() }?.sortedBy { action -> board.find { it.index == action.targetCellIdx }!!.richness }?.last()
+        return actions.takeIf { it.isNotEmpty() }
+            ?.sortedBy { action -> board.find { it.index == action.targetCellIdx }!!.richness }?.last()
+    }
+
+    private fun isInOuterRing(cellId: Int): Boolean {
+        return cellId in 19..36
+    }
+
+    private fun isInMiddleRing(cellId: Int): Boolean {
+        return cellId in 7..18
     }
 }
 
-data class Tree(val cellIndex: Int, val size: Int, val isMine: Boolean, val isDormant: Boolean)
+data class Tree(val cell: Cell, val size: Int, val isMine: Boolean, val isDormant: Boolean)
